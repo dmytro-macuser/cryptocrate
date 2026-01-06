@@ -4,44 +4,51 @@
 
 CryptoCrate makes file encryption accessible to everyone without compromising on security. Unlike simple file obfuscators, CryptoCrate uses industry-standard encryption algorithms to truly protect your data.
 
-## ✨ Status: Phase 2 Complete! ✅
+## ✨ Status: Phase 3 Complete! ✅
 
-**Version 0.2.0 Features:**
+**Version 0.3.0 - Enhanced User Experience!**
+
+**All Core Features:**
 - ✅ AES-256-GCM encryption/decryption
 - ✅ Argon2id password-based key derivation
-- ✅ Single file encryption
-- ✅ **Folder encryption with recursive traversal**
-- ✅ **Zstd compression support**
-- ✅ **Batch operations (multiple files/folders)**
-- ✅ **File metadata preservation**
-- ✅ **Enhanced progress indicators**
-- ✅ Comprehensive unit tests
+- ✅ Single file & folder encryption (recursive)
+- ✅ Zstd compression support
+- ✅ Batch operations
+- ✅ Metadata preservation
+- ✅ **Configuration file support (TOML)**
+- ✅ **Encrypted file inspection (no decryption needed!)**
+- ✅ **Enhanced error messages with helpful suggestions**
+- ✅ **Interactive confirmations for overwrites**
+- ✅ **Improved password prompts**
 
-**Coming Soon (Phase 3):**
-- 📝 Interactive mode
-- ⚙️ Configuration files
-- 🔍 Encrypted file inspection
-- 📦 Binary releases
+**Coming in Phase 4 (v1.0):**
+- 🎨 GUI application
+- 🔑 Key file support
+- 🚫 Secure file deletion
+- 📦 Binary releases for all platforms
 
 ## ✨ Features
 
 ### Core Functionality
 - 📄 **Individual File Encryption**: Encrypt single files quickly ✅
-- 📁 **Folder Encryption**: Encrypt entire directories recursively ✅ **NEW!**
+- 📁 **Folder Encryption**: Encrypt entire directories recursively ✅
 - 🔑 **Password-Based Encryption**: Simple password protection with strong key derivation ✅
-- 🧩 **Compression**: Zstd compression before encryption ✅ **NEW!**
+- 🧩 **Compression**: Zstd compression before encryption ✅
 - ⚡ **Fast Performance**: Optimized for speed without sacrificing security ✅
 - 🛡️ **Real Cryptography**: AES-256-GCM encryption (not just header manipulation!) ✅
-- 📊 **Progress Indicators**: Multi-file progress with detailed status ✅ **ENHANCED!**
-- 📦 **Batch Operations**: Encrypt multiple files/folders at once ✅ **NEW!**
-- 🎯 **Beginner-Friendly**: Simple CLI interface with clear instructions ✅
-- 📝 **Metadata Preservation**: Original filenames, sizes, and timestamps ✅ **NEW!**
+- 📊 **Progress Indicators**: Multi-file progress with detailed status ✅
+- 📦 **Batch Operations**: Encrypt multiple files/folders at once ✅
+- 📝 **Metadata Preservation**: Original filenames, sizes, and timestamps ✅
+- ⚙️ **Configuration Files**: Customize default behavior ✅ **NEW!**
+- 🔍 **File Inspection**: View metadata without decrypting ✅ **NEW!**
+- 💬 **Smart Error Messages**: Helpful suggestions when things go wrong ✅ **NEW!**
+- 🤝 **Interactive Mode**: Confirmations and better prompts ✅ **NEW!**
 
-### Advanced Features (Coming Soon)
-- 🔍 **File Integrity**: Built-in integrity checks to detect tampering ✅ (via GCM)
-- 🚫 **Secure Deletion**: Option to securely delete original files after encryption (Phase 3)
-- 🎨 **GUI Version**: Optional graphical interface for non-technical users (Phase 4)
-- 🔑 **Key Files**: Support for key files in addition to passwords (Phase 4)
+### Advanced Features (Coming in v1.0)
+- 🎨 **GUI Version**: Desktop application for non-technical users
+- 🔑 **Key Files**: Support for key files in addition to passwords
+- 🚫 **Secure Deletion**: Overwrite files before deletion
+- 📦 **Official Releases**: Pre-built binaries for Windows, macOS, Linux
 
 ## 🛠️ Technical Approach
 
@@ -55,7 +62,7 @@ CryptoCrate makes file encryption accessible to everyone without compromising on
 - **Key Derivation**: Argon2id
   - Memory-hard function resistant to GPU/ASIC attacks
   - Winner of the Password Hashing Competition
-  - Parameters: 64 MB memory, 3 iterations, 4 threads
+  - Configurable parameters: 64 MB memory, 3 iterations, 4 threads (default)
 
 - **Compression**: Zstd (Zstandard)
   - Fast compression with excellent ratios
@@ -90,35 +97,30 @@ CryptoCrate makes file encryption accessible to everyone without compromising on
 
 ## 🏭 Architecture
 
-### Current Project Structure
+### Project Structure (v0.3.0)
 ```
 cryptocrate/
 ├── src/
 │   ├── main.rs              # Entry point and CLI ✅
 │   ├── error.rs             # Error types ✅
 │   ├── format.rs            # File format constants ✅
-│   ├── metadata.rs          # Metadata preservation ✅ NEW!
+│   ├── metadata.rs          # Metadata preservation ✅
+│   ├── config.rs            # Configuration management ✅ NEW!
+│   ├── inspect.rs           # File inspection ✅ NEW!
+│   ├── interactive.rs       # Interactive prompts ✅ NEW!
 │   ├── crypto/
 │   │   ├── mod.rs           # Crypto module ✅
 │   │   ├── encryption.rs    # AES-256-GCM implementation ✅
 │   │   └── key_derivation.rs # Argon2id implementation ✅
 │   ├── compression/
-│   │   └── mod.rs           # Zstd compression ✅ NEW!
+│   │   └── mod.rs           # Zstd compression ✅
 │   └── file_handler/
-│       ├── mod.rs           # File handling module ✅ NEW!
-│       └── walker.rs        # Directory traversal ✅ NEW!
+│       ├── mod.rs           # File handling module ✅
+│       └── walker.rs        # Directory traversal ✅
 ├── Cargo.toml               # Dependencies ✅
 ├── LICENSE                  # MIT License ✅
 └── README.md                # This file ✅
 ```
-
-### Technology Choice: Rust 🦀
-**Why Rust?**
-- Memory safety without garbage collection = fast and secure
-- Excellent cryptography libraries (RustCrypto)
-- Cross-platform compilation (Windows, macOS, Linux)
-- Great CLI tools ecosystem (clap, indicatif)
-- Zero-cost abstractions for performance
 
 ### Key Dependencies
 ```toml
@@ -131,6 +133,9 @@ indicatif = "0.17"      # Progress bars
 rpassword = "7.3"       # Secure password input
 walkdir = "2"           # Directory traversal
 zstd = "0.13"           # Fast compression
+toml = "0.8"            # Config file parsing
+serde = "1.0"           # Serialization
+dirs = "5.0"            # User directories
 thiserror = "1.0"       # Error handling
 anyhow = "1.0"          # Error context
 ```
@@ -152,7 +157,7 @@ cargo build --release
 cargo install --path .
 ```
 
-### Usage Examples
+### Basic Usage
 
 **Encrypt a single file:**
 ```bash
@@ -178,38 +183,111 @@ cryptocrate encrypt file1.txt file2.txt folder1/ folder2/
 # Encrypts everything at once
 ```
 
-**Encrypt to a specific output directory:**
-```bash
-cryptocrate encrypt documents/ --output ./encrypted_backup/
-# All encrypted files go to encrypted_backup/
-```
-
 **Decrypt files:**
 ```bash
 cryptocrate decrypt file1.txt.crat file2.txt.crat
 # Restores original filenames automatically
 ```
 
-**Decrypt to specific location:**
+### New in v0.3.0: Inspection & Configuration
+
+**Inspect encrypted files without decrypting:**
 ```bash
-cryptocrate decrypt encrypted_files/*.crat --output ./decrypted/
+cryptocrate inspect secret.txt.crat
+
+# Output:
+# 📦 File Format: CryptoCrate v1
+# 🔐 Algorithm: AES-256-GCM
+# 📄 Original Filename: secret.txt
+# 📏 Original Size: 1.24 MB
+# 📦 Encrypted Size: 856.32 KB
+# 📅 Modified: 2 hours ago
+# 🗜️  Compressed: Yes
+# 📊 Compression Ratio: 69.0% of original
 ```
 
-**Use password in command (less secure, good for scripts):**
+**Create a configuration file:**
 ```bash
-cryptocrate encrypt data.txt --password mypassword
+# Create user config (~/.config/cryptocrate/config.toml)
+cryptocrate config init
+
+# Or create local config (./cryptocrate.toml)
+cryptocrate config init --local
+
+# View current config
+cryptocrate config show
+
+# Edit config (uses $EDITOR)
+cryptocrate config edit
+
+# Show config path
+cryptocrate config path
+```
+
+**Example configuration file:**
+```toml
+# CryptoCrate Configuration File
+
+# Default compression level (1-21, higher = better compression but slower)
+compression_level = 3
+
+# Enable compression by default
+compress_by_default = true
+
+# Default output directory
+default_output_dir = "/home/user/encrypted_files"
+
+# Confirm before overwriting files
+confirm_overwrite = true
+
+# Show detailed progress information
+show_detailed_progress = true
+
+# Argon2 key derivation parameters (advanced)
+argon2_memory_kb = 65536  # 64 MB
+argon2_time_cost = 3       # iterations
+argon2_parallelism = 4     # threads
+```
+
+### Advanced Usage
+
+**Skip confirmation prompts (for scripts):**
+```bash
+cryptocrate encrypt data/ --yes --password mypass
+```
+
+**Use custom config file:**
+```bash
+cryptocrate --config ./my-config.toml encrypt file.txt
+```
+
+**Encrypt to specific output directory:**
+```bash
+cryptocrate encrypt documents/ --output ./backup/encrypted/
+```
+
+**Batch inspect multiple files:**
+```bash
+cryptocrate inspect *.crat
 ```
 
 ### Complete Workflow Example
 ```bash
-# Create test folder
+# Setup
 mkdir test_folder
 echo "Secret data 1" > test_folder/file1.txt
 echo "Secret data 2" > test_folder/file2.txt
 
-# Encrypt entire folder with compression
-cryptocrate encrypt test_folder/ --compress --output encrypted/
+# Create config with compression enabled
+cryptocrate config init --local
+# Edit cryptocrate.toml: set compress_by_default = true
+
+# Encrypt entire folder (uses config)
+cryptocrate encrypt test_folder/ --output encrypted/
 # Enter password when prompted
+
+# Inspect encrypted files
+cryptocrate inspect encrypted/*.crat
 
 # Decrypt everything back
 cryptocrate decrypt encrypted/*.crat --output decrypted/
@@ -218,18 +296,6 @@ cryptocrate decrypt encrypted/*.crat --output decrypted/
 # Verify
 ls decrypted/
 # Output: file1.txt  file2.txt
-```
-
-### Testing
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Test specific module
-cargo test compression
 ```
 
 ## 🛣️ Roadmap
@@ -249,19 +315,20 @@ cargo test compression
 - [x] Compression support (zstd)
 - [x] Batch operations
 
-### Phase 3: User Experience (v0.3) 🚧 **NEXT**
-- [ ] Interactive mode for passwords
-- [ ] Configuration file support
-- [ ] Better error messages with suggestions
-- [ ] Encrypted file inspection (show metadata without decrypting)
-- [ ] Cross-platform binary releases (Linux, macOS, Windows)
+### Phase 3: User Experience (v0.3) ✅ **COMPLETE!**
+- [x] Interactive mode for passwords
+- [x] Configuration file support (TOML)
+- [x] Better error messages with suggestions
+- [x] Encrypted file inspection (show metadata without decrypting)
 
-### Phase 4: Advanced Features (v1.0)
+### Phase 4: Advanced Features & Release (v1.0) 🚧 **FINAL PHASE**
 - [ ] GUI application (desktop)
 - [ ] Key file support (in addition to passwords)
 - [ ] Secure file deletion (overwrite before delete)
-- [ ] Encrypted archive format (.crate files)
 - [ ] Streaming for very large files (>1GB)
+- [ ] Cross-platform binary releases (Linux, macOS, Windows)
+- [ ] Package manager distributions (Homebrew, Chocolatey, etc.)
+- [ ] Comprehensive documentation website
 
 ## 🔒 Security Considerations
 
@@ -272,10 +339,11 @@ cargo test compression
 - **Authentication**: GCM mode provides built-in authentication, preventing tampering
 - **Password verification**: Wrong password = decryption fails (authenticated encryption)
 - **Compression before encryption**: Prevents compression-based attacks
+- **Configurable security parameters**: Adjust Argon2 parameters for your security needs
 
 ## 🧪 Security Testing
 
-The implementation includes tests for:
+The implementation includes comprehensive tests for:
 - ✅ Encryption/decryption roundtrip (with and without compression)
 - ✅ Wrong password detection
 - ✅ Key derivation consistency
@@ -283,6 +351,7 @@ The implementation includes tests for:
 - ✅ Metadata serialization/deserialization
 - ✅ Compression/decompression
 - ✅ Directory traversal
+- ✅ Configuration loading/saving
 
 ## 📊 Performance
 
@@ -292,11 +361,35 @@ The implementation includes tests for:
 - Decryption: ~150-250 MB/s (uncompressed)
 - Decryption: ~80-150 MB/s (with decompression)
 
-**Compression ratios** (text files):
+**Compression ratios** (typical):
 - Plain text: 60-80% smaller
 - JSON/XML: 70-85% smaller
 - Source code: 50-70% smaller
 - Already compressed files (images, videos): minimal benefit
+
+**Memory usage**:
+- Base: ~5-10 MB
+- Per file: Minimal (streaming)
+- Argon2 key derivation: 64 MB (configurable)
+
+## 📝 Error Messages with Helpful Tips
+
+CryptoCrate provides intelligent error messages:
+
+```bash
+$ cryptocrate decrypt wrong.crat
+❌ Error: Invalid password
+
+💡 Tip: Make sure you're using the correct password.
+   Passwords are case-sensitive and must match exactly.
+```
+
+```bash
+$ cryptocrate encrypt missing.txt
+❌ Error: Path not found: missing.txt
+
+💡 Tip: Check your spelling and that the file/folder exists.
+```
 
 ## 🤝 Contributing
 
@@ -309,12 +402,12 @@ Contributions are welcome! Whether you're fixing bugs, improving documentation, 
 5. Open a Pull Request
 
 **Ideas for contributions:**
-- Add more compression algorithms
-- Implement streaming for large files
-- Create a GUI
-- Add benchmarks
+- Implement GUI (Phase 4)
+- Add key file support
+- Create benchmarks
 - Improve documentation
-- Write more tests
+- Add more tests
+- Package for distributions
 
 ## 📜 License
 
@@ -328,14 +421,33 @@ While CryptoCrate uses industry-standard encryption algorithms, no software is 1
 - Keep your software updated
 - Don't lose your passwords (we can't recover them!)
 - Test with non-critical files first
+- Verify encrypted files can be decrypted before deleting originals
 - Consider the legal implications of encryption in your jurisdiction
 
-## 💬 Contact
+## 💬 Contact & Support
 
 Questions? Issues? Ideas? Open an issue or start a discussion!
 
 **Repository**: https://github.com/dmytro-macuser/cryptocrate
 
+**Commands Quick Reference:**
+```bash
+# Encryption
+cryptocrate encrypt <paths...> [--compress] [--output DIR]
+
+# Decryption
+cryptocrate decrypt <files...> [--output DIR]
+
+# Inspection
+cryptocrate inspect <files...>
+
+# Configuration
+cryptocrate config init [--local]
+cryptocrate config show
+cryptocrate config edit
+cryptocrate config path
+```
+
 ---
 
-Made with ❤️ and Rust 🦀 | Phase 2 Complete ✅
+Made with ❤️ and Rust 🦀 | **Phase 3 Complete!** ✅ | Ready for v1.0!
