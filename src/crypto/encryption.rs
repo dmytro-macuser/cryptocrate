@@ -9,9 +9,14 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 
+use crate::compression;
 use crate::crypto::key_derivation::derive_key;
 use crate::error::{CrateError, Result};
 use crate::format::*;
+use crate::metadata::FileMetadata;
+
+/// Maximum decompressed file size (1 GB safety limit)
+const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Encrypt a file with AES-256-GCM
 ///
@@ -19,10 +24,16 @@ use crate::format::*;
 /// * `input_path` - Path to the file to encrypt
 /// * `output_path` - Path where the encrypted file will be saved
 /// * `password` - Password for encryption
+/// * `compress` - Whether to compress before encrypting
 ///
 /// # Returns
 /// Ok(()) on success, or an error
-pub fn encrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &str) -> Result<()> {
+pub fn encrypt_file<P: AsRef<Path>>(
+    input_path: P,
+    output_path: P,
+    password: &str,
+    compress: bool,
+) -> Result<()> {
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
 
@@ -33,10 +44,17 @@ pub fn encrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
     let mut plaintext = Vec::new();
     input_file.read_to_end(&mut plaintext)?;
 
+    // Compress if requested
+    let data_to_encrypt = if compress && !plaintext.is_empty() {
+        compression::compress(&plaintext, None)?
+    } else {
+        plaintext.clone()
+    };
+
     // Generate random salt and nonce
     let mut salt = [0u8; SALT_LENGTH];
     let mut nonce_bytes = [0u8; NONCE_LENGTH];
-    
+
     let mut rng = rand::thread_rng();
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut nonce_bytes);
@@ -52,18 +70,15 @@ pub fn encrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
 
     // Encrypt the data
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
+        .encrypt(nonce, data_to_encrypt.as_ref())
         .map_err(|e| CrateError::Encryption(e.to_string()))?;
 
-    // Prepare metadata (original filename)
-    let filename = input_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .as_bytes();
+    // Create metadata
+    let metadata = FileMetadata::from_file(input_path, compress)?;
+    let metadata_bytes = metadata.to_bytes();
 
     // Create header
-    let header = FileHeader::new(salt, nonce_bytes, filename.len() as u32);
+    let header = FileHeader::new(salt, nonce_bytes, metadata_bytes.len() as u32);
 
     // Write encrypted file
     let mut output_file = OpenOptions::new()
@@ -90,8 +105,8 @@ pub fn encrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
     // Write metadata length
     output_file.write_all(&header.metadata_length.to_le_bytes())?;
 
-    // Write metadata (filename)
-    output_file.write_all(filename)?;
+    // Write metadata
+    output_file.write_all(&metadata_bytes)?;
 
     // Write encrypted data
     output_file.write_all(&ciphertext)?;
@@ -109,8 +124,12 @@ pub fn encrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
 /// * `password` - Password for decryption
 ///
 /// # Returns
-/// Ok(original_filename) on success, or an error
-pub fn decrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &str) -> Result<String> {
+/// Ok(FileMetadata) on success, or an error
+pub fn decrypt_file<P: AsRef<Path>>(
+    input_path: P,
+    output_path: P,
+    password: &str,
+) -> Result<FileMetadata> {
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
 
@@ -156,10 +175,10 @@ pub fn decrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
     input_file.read_exact(&mut metadata_len_bytes)?;
     let metadata_len = u32::from_le_bytes(metadata_len_bytes) as usize;
 
-    // Read metadata (original filename)
-    let mut metadata = vec![0u8; metadata_len];
-    input_file.read_exact(&mut metadata)?;
-    let original_filename = String::from_utf8_lossy(&metadata).to_string();
+    // Read metadata
+    let mut metadata_bytes = vec![0u8; metadata_len];
+    input_file.read_exact(&mut metadata_bytes)?;
+    let metadata = FileMetadata::from_bytes(&metadata_bytes)?;
 
     // Read encrypted data
     let mut ciphertext = Vec::new();
@@ -175,9 +194,16 @@ pub fn decrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Decrypt the data
-    let plaintext = cipher
+    let decrypted_data = cipher
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|_| CrateError::InvalidPassword)?;
+
+    // Decompress if needed
+    let plaintext = if metadata.is_compressed {
+        compression::decompress(&decrypted_data, MAX_DECOMPRESSED_SIZE)?
+    } else {
+        decrypted_data
+    };
 
     // Write decrypted file
     let mut output_file = OpenOptions::new()
@@ -189,7 +215,7 @@ pub fn decrypt_file<P: AsRef<Path>>(input_path: P, output_path: P, password: &st
     output_file.write_all(&plaintext)?;
     output_file.flush()?;
 
-    Ok(original_filename)
+    Ok(metadata)
 }
 
 #[cfg(test)]
@@ -211,14 +237,40 @@ mod tests {
 
         let password = "super_secret_password";
 
-        // Encrypt
-        encrypt_file(&input_path, &encrypted_path, password).unwrap();
+        // Encrypt without compression
+        encrypt_file(&input_path, &encrypted_path, password, false).unwrap();
         assert!(encrypted_path.exists());
 
         // Decrypt
-        let original_name = decrypt_file(&encrypted_path, &decrypted_path, password).unwrap();
+        let metadata = decrypt_file(&encrypted_path, &decrypted_path, password).unwrap();
         assert!(decrypted_path.exists());
-        assert_eq!(original_name, "test.txt");
+        assert_eq!(metadata.filename, "test.txt");
+        assert!(!metadata.is_compressed);
+
+        // Verify content
+        let decrypted_data = fs::read(&decrypted_path).unwrap();
+        assert_eq!(decrypted_data, test_data);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_with_compression() {
+        let temp_dir = TempDir::new().unwrap();
+        let input_path = temp_dir.path().join("test.txt");
+        let encrypted_path = temp_dir.path().join("test.txt.crat");
+        let decrypted_path = temp_dir.path().join("test_decrypted.txt");
+
+        // Create test file with repeating content (compresses well)
+        let test_data = b"Hello, World! ".repeat(100);
+        fs::write(&input_path, &test_data).unwrap();
+
+        let password = "super_secret_password";
+
+        // Encrypt with compression
+        encrypt_file(&input_path, &encrypted_path, password, true).unwrap();
+
+        // Decrypt
+        let metadata = decrypt_file(&encrypted_path, &decrypted_path, password).unwrap();
+        assert!(metadata.is_compressed);
 
         // Verify content
         let decrypted_data = fs::read(&decrypted_path).unwrap();
@@ -234,7 +286,7 @@ mod tests {
 
         fs::write(&input_path, b"Secret data").unwrap();
 
-        encrypt_file(&input_path, &encrypted_path, "correct_password").unwrap();
+        encrypt_file(&input_path, &encrypted_path, "correct_password", false).unwrap();
 
         let result = decrypt_file(&encrypted_path, &decrypted_path, "wrong_password");
         assert!(result.is_err());
