@@ -1,6 +1,6 @@
 [package]
 name = "cryptocrate"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Dmytro Vlasiuk <tamarkaflop@icloud.com>"]
 description = "A fast, user-friendly file and folder encryption tool with strong cryptography"
@@ -25,6 +25,11 @@ walkdir = "2"
 
 # Compression
 zstd = "0.13"
+
+# Configuration
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+dirs = "5.0"
 
 # Error handling
 thiserror = "1.0"
