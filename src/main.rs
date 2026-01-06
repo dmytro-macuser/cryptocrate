@@ -11,7 +11,10 @@ mod file_handler;
 mod format;
 mod inspect;
 mod interactive;
+mod keyfile;
 mod metadata;
+mod secure_delete;
+mod streaming;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -27,11 +30,14 @@ use crypto::{decrypt_file, encrypt_file};
 use file_handler::collect_files;
 use inspect::inspect_file;
 use interactive::{confirm, prompt_password, prompt_password_with_confirm};
+use keyfile::{combine_password_and_keyfile, generate_keyfile, read_keyfile, DEFAULT_KEYFILE_SIZE};
+use secure_delete::{secure_delete, SecureDeleteMode};
+use streaming::{decrypt_file_streaming, encrypt_file_streaming, should_use_streaming};
 
 #[derive(Parser)]
 #[command(name = "cryptocrate")]
 #[command(author = "Dmytro Vlasiuk")]
-#[command(version = "0.3.0")]
+#[command(version = "1.0.0")]
 #[command(about = "🔐 A fast, user-friendly file and folder encryption tool", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -62,6 +68,18 @@ enum Commands {
         #[arg(short, long)]
         password: Option<String>,
 
+        /// Key file for encryption (can be combined with password)
+        #[arg(short, long)]
+        keyfile: Option<PathBuf>,
+
+        /// Securely delete original files after encryption
+        #[arg(long)]
+        delete: bool,
+
+        /// Secure deletion mode (quick, standard, paranoid)
+        #[arg(long, default_value = "standard")]
+        delete_mode: String,
+
         /// Skip confirmation prompts
         #[arg(short = 'y', long)]
         yes: bool,
@@ -80,6 +98,10 @@ enum Commands {
         #[arg(short, long)]
         password: Option<String>,
 
+        /// Key file for decryption (if used during encryption)
+        #[arg(short, long)]
+        keyfile: Option<PathBuf>,
+
         /// Skip confirmation prompts
         #[arg(short = 'y', long)]
         yes: bool,
@@ -89,6 +111,16 @@ enum Commands {
         /// Paths to encrypted files (.crat) to inspect
         #[arg(value_name = "PATH", required = true)]
         paths: Vec<PathBuf>,
+    },
+    /// Generate a new key file
+    Keygen {
+        /// Output path for the key file
+        #[arg(value_name = "PATH")]
+        output: PathBuf,
+
+        /// Key file size in bytes (default: 4096)
+        #[arg(short, long)]
+        size: Option<usize>,
     },
     /// Manage configuration
     Config {
@@ -130,16 +162,74 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Parse secure delete mode
+fn parse_delete_mode(mode_str: &str) -> SecureDeleteMode {
+    match mode_str.to_lowercase().as_str() {
+        "quick" | "q" => SecureDeleteMode::Quick,
+        "standard" | "s" => SecureDeleteMode::Standard,
+        "paranoid" | "p" => SecureDeleteMode::Paranoid,
+        _ => SecureDeleteMode::Standard,
+    }
+}
+
+/// Get password with optional keyfile
+fn get_password_with_keyfile(
+    password_opt: Option<String>,
+    keyfile_opt: Option<PathBuf>,
+    for_encryption: bool,
+) -> Result<String> {
+    let keyfile_hash = if let Some(keyfile_path) = keyfile_opt {
+        println!("🔑 Reading key file: {}", keyfile_path.display());
+        Some(read_keyfile(&keyfile_path)?)
+    } else {
+        None
+    };
+
+    let password = match password_opt {
+        Some(p) => p,
+        None => {
+            if keyfile_hash.is_some() {
+                println!("\n💡 Tip: Key file detected. You can optionally add a password for two-factor security.");
+                println!("   Press Enter to skip password (key file only).");
+            }
+
+            if for_encryption {
+                prompt_password_with_confirm("Enter password (or press Enter to skip)")?
+            } else {
+                prompt_password("Enter password (or press Enter if using key file only)")?
+            }
+        }
+    };
+
+    // Combine password and keyfile if both are provided
+    if let Some(kf_hash) = keyfile_hash {
+        if password.is_empty() {
+            // Key file only - use keyfile hash as "password"
+            Ok(hex::encode(kf_hash))
+        } else {
+            // Both password and keyfile - combine them
+            let combined = combine_password_and_keyfile(&password, &kf_hash);
+            Ok(hex::encode(combined))
+        }
+    } else {
+        // Password only
+        if password.is_empty() {
+            anyhow::bail!("Password cannot be empty!\n\n💡 Tip: Provide either a password, a key file, or both.");
+        }
+        Ok(password)
+    }
+}
+
 /// Enhanced error messages with suggestions
 fn handle_error(err: anyhow::Error) {
     eprintln!("❌ Error: {}", err);
-    
+
     let err_str = err.to_string();
-    
+
     // Provide helpful suggestions based on error type
     if err_str.contains("Password") || err_str.contains("password") {
-        eprintln!("\n💡 Tip: Make sure you're using the correct password.");
-        eprintln!("   Passwords are case-sensitive and must match exactly.");
+        eprintln!("\n💡 Tip: Make sure you're using the correct password and/or key file.");
+        eprintln!("   If you used a key file during encryption, you must use the same file for decryption.");
     } else if err_str.contains("not found") || err_str.contains("No such file") {
         eprintln!("\n💡 Tip: Check that the file path is correct and the file exists.");
         eprintln!("   Use 'ls' or 'dir' to list files in the current directory.");
@@ -161,14 +251,25 @@ fn handle_encrypt(
     compress: bool,
     output_dir: Option<PathBuf>,
     password: Option<String>,
+    keyfile: Option<PathBuf>,
+    delete_originals: bool,
+    delete_mode_str: String,
     yes: bool,
     config: &Config,
 ) -> Result<()> {
     // Validate all paths exist
     for path in &paths {
         if !path.exists() {
-            anyhow::bail!("Path not found: {}\n\n💡 Tip: Check your spelling and that the file/folder exists.", path.display());
+            anyhow::bail!(
+                "Path not found: {}\n\n💡 Tip: Check your spelling and that the file/folder exists.",
+                path.display()
+            );
         }
+    }
+
+    // Warning about compression with streaming
+    if compress {
+        println!("💡 Note: Large files (>100 MB) cannot use compression due to streaming mode.");
     }
 
     // Use compression from config if not specified
@@ -186,33 +287,16 @@ fn handle_encrypt(
         return Ok(());
     }
 
-    // Check for existing encrypted files
-    if !yes && config.confirm_overwrite {
-        let output_dir_ref = output_dir.as_ref().or(config.default_output_dir.as_ref().map(|s| Path::new(s)));
-        let mut overwrite_count = 0;
-        
-        for file_entry in &all_files {
-            let filename = file_entry.path.file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
-            
-            let output_path = if let Some(out_dir) = output_dir_ref {
-                out_dir.join(format!("{}.crat", filename))
-            } else {
-                file_entry.path.with_extension("crat")
-            };
-            
-            if output_path.exists() {
-                overwrite_count += 1;
-            }
-        }
-        
-        if overwrite_count > 0 {
-            if !confirm(&format!("\n⚠️  {} encrypted file(s) will be overwritten. Continue?", overwrite_count), false)? {
-                println!("Operation cancelled.");
-                return Ok(());
-            }
-        }
+    // Check for large files
+    let large_file_count = all_files
+        .iter()
+        .filter(|f| f.size > streaming::STREAMING_THRESHOLD)
+        .count();
+    if large_file_count > 0 {
+        println!(
+            "📦 {} large file(s) detected - will use streaming mode (no compression)",
+            large_file_count
+        );
     }
 
     // Calculate total size
@@ -222,23 +306,35 @@ fn handle_encrypt(
     println!("\n📊 Encryption Summary:");
     println!("   Files: {}", file_count);
     println!("   Total size: {}", format_size(total_size));
-    println!("   Compression: {}", if compress { "✅ enabled" } else { "❌ disabled" });
+    println!(
+        "   Compression: {}",
+        if compress { "✅ enabled" } else { "❌ disabled" }
+    );
+    if keyfile.is_some() {
+        println!("   Key file: ✅ will be used");
+    }
+    if delete_originals {
+        let mode = parse_delete_mode(&delete_mode_str);
+        println!("   Secure delete: ✅ enabled ({:?} mode)", mode);
+    }
     println!();
 
-    // Get password
-    let password = match password {
-        Some(p) => p,
-        None => prompt_password_with_confirm("Enter password")?,
-    };
-
-    if password.is_empty() {
-        anyhow::bail!("Password cannot be empty!\n\n💡 Tip: Use a strong password with at least 12 characters.");
+    // Confirm deletion if enabled
+    if delete_originals && !yes {
+        if !confirm(
+            "⚠️  Original files will be PERMANENTLY deleted after encryption. Continue?",
+            false,
+        )? {
+            println!("Operation cancelled.");
+            return Ok(());
+        }
     }
 
+    // Get password (possibly combined with keyfile)
+    let password = get_password_with_keyfile(password, keyfile, true)?;
+
     // Determine output directory
-    let output_dir = output_dir.or_else(|| {
-        config.default_output_dir.as_ref().map(PathBuf::from)
-    });
+    let output_dir = output_dir.or_else(|| config.default_output_dir.as_ref().map(PathBuf::from));
 
     // Setup progress
     let multi_progress = MultiProgress::new();
@@ -255,6 +351,7 @@ fn handle_encrypt(
     let mut total_encrypted_size = 0u64;
     let mut success_count = 0;
     let mut error_count = 0;
+    let delete_mode = parse_delete_mode(&delete_mode_str);
 
     // Encrypt each file
     for (idx, file_entry) in all_files.iter().enumerate() {
@@ -289,19 +386,49 @@ fn handle_encrypt(
             file_entry.path.with_extension("crat")
         };
 
-        // Encrypt the file
-        match encrypt_file(&file_entry.path, &output_path, &password, compress) {
+        // Encrypt the file (use streaming for large files)
+        let use_streaming = should_use_streaming(&file_entry.path)?;
+        let should_compress = compress && !use_streaming;
+
+        let encrypt_result = if use_streaming {
+            encrypt_file_streaming(&file_entry.path, &output_path, &password)
+        } else {
+            encrypt_file(&file_entry.path, &output_path, &password, should_compress)
+        };
+
+        match encrypt_result {
             Ok(_) => {
                 total_original_size += file_entry.size;
                 if let Ok(metadata) = fs::metadata(&output_path) {
                     total_encrypted_size += metadata.len();
                 }
-                if let Some(ref pb) = file_pb {
-                    pb.finish_with_message(format!(
-                        "✅ {} ({})",
-                        filename,
-                        format_size(file_entry.size)
-                    ));
+
+                // Securely delete original if requested
+                if delete_originals {
+                    if let Err(e) = secure_delete(&file_entry.path, delete_mode) {
+                        if let Some(ref pb) = file_pb {
+                            pb.finish_with_message(format!(
+                                "⚠️  {} - Encrypted but failed to delete: {}",
+                                filename, e
+                            ));
+                        }
+                    } else {
+                        if let Some(ref pb) = file_pb {
+                            pb.finish_with_message(format!(
+                                "✅ {} ({}) 🗜️ ",
+                                filename,
+                                format_size(file_entry.size)
+                            ));
+                        }
+                    }
+                } else {
+                    if let Some(ref pb) = file_pb {
+                        pb.finish_with_message(format!(
+                            "✅ {} ({})",
+                            filename,
+                            format_size(file_entry.size)
+                        ));
+                    }
                 }
                 success_count += 1;
             }
@@ -338,6 +465,10 @@ fn handle_encrypt(
         println!("   Space saved: {:.1}%", ratio);
     }
 
+    if delete_originals {
+        println!("   🗜️  Original files securely deleted");
+    }
+
     Ok(())
 }
 
@@ -346,13 +477,17 @@ fn handle_decrypt(
     paths: Vec<PathBuf>,
     output_dir: Option<PathBuf>,
     password: Option<String>,
+    keyfile: Option<PathBuf>,
     yes: bool,
     config: &Config,
 ) -> Result<()> {
     // Validate all paths exist
     for path in &paths {
         if !path.exists() {
-            anyhow::bail!("File not found: {}\n\n💡 Tip: Make sure the .crat file exists.", path.display());
+            anyhow::bail!(
+                "File not found: {}\n\n💡 Tip: Make sure the .crat file exists.",
+                path.display()
+            );
         }
         if !path.is_file() {
             anyhow::bail!("Not a file: {}\n\n💡 Tip: Decrypt command only works with files, not directories.", path.display());
@@ -362,17 +497,13 @@ fn handle_decrypt(
     let file_count = paths.len();
     println!("\n📊 Decryption Summary:");
     println!("   Files: {}", file_count);
+    if keyfile.is_some() {
+        println!("   Key file: ✅ will be used");
+    }
     println!();
 
-    // Get password
-    let password = match password {
-        Some(p) => p,
-        None => prompt_password("Enter password")?,
-    };
-
-    if password.is_empty() {
-        anyhow::bail!("Password cannot be empty!");
-    }
+    // Get password (possibly combined with keyfile)
+    let password = get_password_with_keyfile(password, keyfile, false)?;
 
     // Determine output directory
     let output_dir = output_dir.or_else(|| config.default_output_dir.as_ref().map(PathBuf::from));
@@ -380,11 +511,6 @@ fn handle_decrypt(
     // Create output directory if specified
     if let Some(ref out_dir) = output_dir {
         fs::create_dir_all(out_dir)?;
-    }
-
-    // Check for existing files
-    if !yes && config.confirm_overwrite {
-        // We'll check as we go since we don't know original filenames yet
     }
 
     // Setup progress
@@ -429,8 +555,18 @@ fn handle_decrypt(
             path.with_file_name("temp_decrypt")
         };
 
+        // Check if we should use streaming
+        let file_size = fs::metadata(path)?.len();
+        let use_streaming = file_size > streaming::STREAMING_THRESHOLD;
+
         // Decrypt the file
-        match decrypt_file(path, &temp_output, &password) {
+        let decrypt_result = if use_streaming {
+            decrypt_file_streaming(path, &temp_output, &password)
+        } else {
+            decrypt_file(path, &temp_output, &password)
+        };
+
+        match decrypt_result {
             Ok(metadata) => {
                 // Move to final location with original filename
                 let final_output = if let Some(ref out_dir) = output_dir {
@@ -507,9 +643,9 @@ fn handle_inspect(paths: Vec<PathBuf>) -> Result<()> {
         if idx > 0 {
             println!("\n{}", "=".repeat(60));
         }
-        
+
         println!("\n🔍 Inspecting: {}\n", path.display());
-        
+
         match inspect_file(path) {
             Ok(info) => {
                 print!("{}", info.display());
@@ -522,7 +658,40 @@ fn handle_inspect(paths: Vec<PathBuf>) -> Result<()> {
             }
         }
     }
-    
+
+    Ok(())
+}
+
+/// Handle keygen command
+fn handle_keygen(output: PathBuf, size: Option<usize>) -> Result<()> {
+    let size = size.unwrap_or(DEFAULT_KEYFILE_SIZE);
+
+    println!("\n🔑 Generating key file...");
+    println!("   Path: {}", output.display());
+    println!("   Size: {} bytes ({} KB)", size, size / 1024);
+
+    if output.exists() {
+        if !confirm(
+            &format!("Key file already exists at {:?}. Overwrite?", output),
+            false,
+        )? {
+            println!("Operation cancelled.");
+            return Ok(());
+        }
+    }
+
+    generate_keyfile(&output, Some(size))?;
+
+    println!("\n✅ Key file generated successfully!");
+    println!("\n⚠️  IMPORTANT:");
+    println!("   - Keep this key file SAFE and SECURE");
+    println!("   - Make a BACKUP copy in a safe location");
+    println!("   - Anyone with this file can decrypt your data");
+    println!("   - If you lose it, you CANNOT decrypt your files");
+    println!("\n💡 Usage:");
+    println!("   cryptocrate encrypt file.txt --keyfile {}", output.display());
+    println!("   cryptocrate decrypt file.txt.crat --keyfile {}", output.display());
+
     Ok(())
 }
 
@@ -544,7 +713,10 @@ fn handle_config(action: ConfigAction) -> Result<()> {
             };
 
             if path.exists() {
-                if !confirm(&format!("Config file already exists at {:?}. Overwrite?", path), false)? {
+                if !confirm(
+                    &format!("Config file already exists at {:?}. Overwrite?", path),
+                    false,
+                )? {
                     println!("Operation cancelled.");
                     return Ok(());
                 }
@@ -577,7 +749,12 @@ fn handle_config(action: ConfigAction) -> Result<()> {
             std::process::Command::new(editor)
                 .arg(&path)
                 .status()
-                .map_err(|e| anyhow::anyhow!("Failed to open editor: {}. Try setting $EDITOR environment variable.", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to open editor: {}. Try setting $EDITOR environment variable.",
+                        e
+                    )
+                })?;
         }
         ConfigAction::Path => {
             if PathBuf::from("cryptocrate.toml").exists() {
@@ -617,15 +794,30 @@ fn main() {
             compress,
             output,
             password,
+            keyfile,
+            delete,
+            delete_mode,
             yes,
-        } => handle_encrypt(paths, compress, output, password, yes, &config),
+        } => handle_encrypt(
+            paths,
+            compress,
+            output,
+            password,
+            keyfile,
+            delete,
+            delete_mode,
+            yes,
+            &config,
+        ),
         Commands::Decrypt {
             paths,
             output,
             password,
+            keyfile,
             yes,
-        } => handle_decrypt(paths, output, password, yes, &config),
+        } => handle_decrypt(paths, output, password, keyfile, yes, &config),
         Commands::Inspect { paths } => handle_inspect(paths),
+        Commands::Keygen { output, size } => handle_keygen(output, size),
         Commands::Config { action } => handle_config(action),
     };
 
